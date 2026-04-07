@@ -1,44 +1,65 @@
 name: CI/CD Pipeline
 
+# Trigger the pipeline on every push or PR to main
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  build:
+  build-and-test:
+    name: Build & Test
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    # Step 1: Checkout the repo
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    # Step 2: Set up Python
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
 
-      - name: Build Check
-        run: python -m py_compile app/app.py
+    # Step 3: Create virtual environment & install dependencies
+    - name: Install dependencies
+      run: |
+        python -m venv venv
+        source venv/bin/activate
+        pip install --upgrade pip
+        pip install -r requirements.txt
 
-  test:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      - run: pip install -r requirements.txt
-      - name: Run Tests
-        run: python -m pytest tests
+    # Step 4: Run tests
+    - name: Run tests
+      run: |
+        source venv/bin/activate
+        pytest tests/
 
   deploy:
+    name: Deploy to Azure VM
     runs-on: ubuntu-latest
-    needs: test
+    needs: build-and-test  # only deploy if build & test succeed
+
     steps:
-      - name: Deploy to Azure VM
-        uses: appleboy/ssh-action@v0.1.6
-        with:
-          host: ${{ secrets.AZURE_VM_IP }}
-          username: ${{ secrets.AZURE_VM_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: ./scripts/deploy.sh
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Step 1: Deploy to Azure VM using SSH
+    - name: Deploy to Azure VM
+      uses: appleboy/ssh-action@v0.1.7
+      with:
+        host: ${{ secrets.AZURE_HOST }}        # Azure VM public IP
+        username: ${{ secrets.AZURE_USER }}    # Azure VM username
+        key: ${{ secrets.AZURE_KEY }}          # Private key stored in GitHub secrets
+        port: 22
+        script: |
+          cd ~/devops-health-dashboard
+          git reset --hard
+          git pull origin main
+          source venv/bin/activate
+          pip install -r requirements.txt
+          # Kill existing app process if running
+          pkill -f "python app/app.py" || true
+          nohup python app/app.py &
